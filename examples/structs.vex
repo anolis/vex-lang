@@ -1,0 +1,22 @@
+struct Vec3 {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+fn dot(a: Vec3, b: Vec3) -> f64 {
+    return a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+fn length_sq(v: Vec3) -> f64 {
+    return dot(v, v)
+}
+
+fn main() -> i32 {
+    let v: Vec3 = Vec3 { x: 1.0, y: 2.0, z: 3.0 }
+    let w: Vec3 = Vec3 { x: 4.0, y: 5.0, z: 6.0 }
+    let d: f64 = dot(v, w)
+    let ls: f64 = length_sq(v)
+    print("dot = %f, length_sq = %f\n", d, ls)
+    return 0
+}

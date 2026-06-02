@@ -1,0 +1,26 @@
+/* Demonstrates heap allocation and pointer arithmetic */
+
+struct Node {
+    value: i64,
+    next: ptr<mut Node>,
+}
+
+fn make_node(val: i64) -> ptr<mut Node> {
+    let n: ptr<mut Node> = alloc<Node>()
+    (*n).value = val
+    (*n).next = nil
+    return n
+}
+
+fn main() -> i32 {
+    let a: ptr<mut Node> = make_node(10)
+    let b: ptr<mut Node> = make_node(20)
+    (*a).next = b
+
+    print("a.value = %lld\n", (*a).value)
+    print("a.next.value = %lld\n", (*(*a).next).value)
+
+    free(b)
+    free(a)
+    return 0
+}
