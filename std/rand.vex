@@ -1,0 +1,59 @@
+/* std/rand.vex — pseudo-random number generation
+ *
+ * Wraps C stdlib rand/srand (LCG, period 2^31-1).
+ * For seeding with real entropy use rand_seed_time().
+ *
+ * Usage:
+ *   rand_seed(42)
+ *   let x: i32 = rand_next()          // [0, RAND_MAX]
+ *   let n: i64 = rand_range(1, 100)   // [1, 100] inclusive
+ *   let f: f64 = rand_f64()           // [0.0, 1.0)
+ */
+
+import "time.vex"
+
+extern fn rand() -> i32
+extern fn srand(seed: u32)
+
+// Seed the RNG with an explicit value. Same seed → same sequence.
+fn rand_seed(seed: u32) {
+    srand(seed)
+}
+
+// Seed from the current Unix timestamp (good enough for most uses).
+fn rand_seed_time() {
+    srand(time_now() as u32)
+}
+
+// Return the next random integer in [0, RAND_MAX] (RAND_MAX = 2147483647).
+fn rand_next() -> i32 {
+    return rand()
+}
+
+// Return a random i64 in [lo, hi] inclusive.
+fn rand_range(lo: i64, hi: i64) -> i64 {
+    let span: i64 = hi - lo + 1
+    return lo + (rand() as i64) % span
+}
+
+// Return a random f64 in [0.0, 1.0).
+fn rand_f64() -> f64 {
+    return (rand() as f64) / 2147483648.0
+}
+
+// Return a random bool.
+fn rand_bool() -> bool {
+    return (rand() & 1) == 1
+}
+
+// Shuffle a slice of u64 values in place (Fisher-Yates).
+fn rand_shuffle(arr: ptr<mut u64>, n: u64) {
+    let mut i: u64 = n - 1
+    while i > 0 {
+        let j: u64 = (rand() as u64) % (i + 1)
+        let tmp: u64 = arr[i]
+        arr[i] = arr[j]
+        arr[j] = tmp
+        i -= 1
+    }
+}

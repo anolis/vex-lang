@@ -1,0 +1,36 @@
+/* Test: time, rand, env modules */
+import "../std/time.vex"
+import "../std/rand.vex"
+import "../std/env.vex"
+
+fn main() -> i32 {
+    // ---- time ----
+    let t0: i64 = time_mono_ns()
+    let now: i64 = time_now()
+    let t1: i64 = time_mono_ns()
+    print("unix time   : %lld\n", now)
+    print("elapsed ns  : %lld\n", t1 - t0)
+    print("mono ms     : %lld\n", time_mono_ms())
+
+    // ---- rand ----
+    rand_seed(12345)
+    print("rand_next   : %d\n",   rand_next())
+    print("rand_range  : %lld\n", rand_range(1, 100))
+    print("rand_f64    : %f\n",   rand_f64())
+    print("rand_bool   : %d\n",   rand_bool() as i32)
+
+    // ---- env ----
+    let home: str = env_get("HOME")
+    if home != nil {
+        print("HOME        : %s\n", home)
+    } else {
+        print("HOME        : (not set)\n")
+    }
+    print("pid         : %d\n", env_pid())
+
+    env_set("VEX_TEST", "hello")
+    let v: str = env_get("VEX_TEST")
+    print("VEX_TEST    : %s\n", v)
+
+    return 0
+}

@@ -21,6 +21,9 @@ Modules that depend on other stdlib modules import them internally — you do no
 - [hash](#hash) — open-addressing hash map
 - [flux](#flux) — Flux binary format encoder/decoder
 - [net](#net) — TCP/IP socket primitives
+- [time](#time) — clocks, timestamps, and sleep
+- [rand](#rand) — pseudo-random number generation
+- [env](#env) — process environment and control
 
 ---
 
@@ -788,3 +791,235 @@ fclose(fp)
 ```
 
 > **Note:** `net.vex` does not include `unistd.h` directly — `close`, `send`, and `recv` are declared as externs. The generated C is compiled with gcc which finds these in the default headers. No extra linker flags are required.
+
+---
+
+## time
+
+**File:** `std/time.vex`
+
+Monotonic and wall-clock time, plus sleep helpers. Wraps `clock_gettime`, `time`, `sleep`, and `usleep` from `time.h` and `unistd.h`.
+
+### Data Structures
+
+```
+struct TimeSpec {
+    tv_sec:  i64,
+    tv_nsec: i64,
+}
+```
+
+Matches `struct timespec` on Linux and macOS.
+
+### Functions
+
+```
+fn time_now() -> i64
+```
+Return the current Unix timestamp (seconds since the epoch). Uses `time(NULL)` internally.
+
+```
+fn time_mono_ns() -> i64
+fn time_mono_us() -> i64
+fn time_mono_ms() -> i64
+```
+Return monotonic time in nanoseconds, microseconds, or milliseconds. Uses `CLOCK_MONOTONIC` — values are only meaningful as differences. Call twice and subtract to measure elapsed time.
+
+```
+fn time_sleep_s(s: u32)
+fn time_sleep_ms(ms: u32)
+fn time_sleep_us(us: u32)
+```
+Sleep for the given duration.
+
+### Low-Level Externs
+
+```
+fn clock_gettime(clk: i32, ts: ptr<mut TimeSpec>) -> i32
+fn time(t: ptr<mut i64>) -> i64
+fn sleep(seconds: u32) -> u32
+fn usleep(usec: u32) -> i32
+```
+
+`clk` constants: `CLOCK_REALTIME = 0`, `CLOCK_MONOTONIC = 1`.
+
+### Common Patterns
+
+```
+// Measure elapsed time
+let t0: i64 = time_mono_ns()
+// ... work ...
+let elapsed_ms: i64 = (time_mono_ns() - t0) / 1000000
+print("took %lld ms\n", elapsed_ms)
+
+// Get Unix timestamp for logging
+let ts: i64 = time_now()
+print("[%lld] event occurred\n", ts)
+
+// Throttle a loop to ~10 iterations/second
+while true {
+    do_work()
+    time_sleep_ms(100)
+}
+```
+
+---
+
+## rand
+
+**File:** `std/rand.vex`  
+**Imports:** `time.vex`
+
+Pseudo-random number generation wrapping the C stdlib LCG (`rand`/`srand`, period 2^31−1). Suitable for simulations, shuffles, and non-cryptographic use.
+
+### Functions
+
+```
+fn rand_seed(seed: u32)
+```
+Seed the RNG with an explicit value. The same seed always produces the same sequence.
+
+```
+fn rand_seed_time()
+```
+Seed from the current Unix timestamp. Different on each run (to second granularity).
+
+```
+fn rand_next() -> i32
+```
+Return the next random integer in `[0, RAND_MAX]` where `RAND_MAX = 2147483647`.
+
+```
+fn rand_range(lo: i64, hi: i64) -> i64
+```
+Return a random integer in `[lo, hi]` inclusive.
+
+```
+fn rand_f64() -> f64
+```
+Return a random `f64` in `[0.0, 1.0)`.
+
+```
+fn rand_bool() -> bool
+```
+Return a random boolean (50/50).
+
+```
+fn rand_shuffle(arr: ptr<mut u64>, n: u64)
+```
+Shuffle `n` elements of a `u64` array in place using Fisher-Yates. To shuffle other types, cast your pointer to `ptr<mut u64>` (only safe when elements are exactly 8 bytes).
+
+### Common Patterns
+
+```
+// Reproducible sequence
+rand_seed(42)
+let a: i64 = rand_range(0, 255)
+
+// Different each run
+rand_seed_time()
+let roll: i64 = rand_range(1, 6)   // dice roll
+
+// Random probability
+if rand_f64() < 0.1 {
+    // 10% chance
+}
+
+// Shuffle an array
+let arr: ptr<mut u64> = alloc<u64>(10)
+// ... fill arr ...
+rand_shuffle(arr, 10)
+```
+
+---
+
+## env
+
+**File:** `std/env.vex`
+
+Process environment variables, exit/abort, and process identity. All functions wrap POSIX calls from `stdlib.h` and `unistd.h`.
+
+### Functions
+
+#### Environment Variables
+
+```
+fn env_get(name: str) -> str
+```
+Return the value of environment variable `name`, or `nil` if not set. The returned string is owned by the process environment — do not free it.
+
+```
+fn env_set(name: str, value: str) -> i32
+```
+Set environment variable `name` to `value`, overwriting any existing value. Returns 0 on success.
+
+```
+fn env_unset(name: str) -> i32
+```
+Remove environment variable `name`. Returns 0 on success.
+
+#### Process Control
+
+```
+fn env_exit(code: i32)
+```
+Exit the process with the given status code. `0` means success; any non-zero value signals failure.
+
+```
+fn env_abort()
+```
+Abort the process immediately (raises `SIGABRT`). Produces a core dump if ulimits allow. Use for unrecoverable internal errors.
+
+#### Process Info
+
+```
+fn env_pid() -> i32
+```
+Return the process ID of the current process.
+
+```
+fn env_ppid() -> i32
+```
+Return the process ID of the parent process.
+
+#### Shell Commands
+
+```
+fn env_run(cmd: str) -> i32
+```
+Run a shell command via `system()`. Returns the exit status of the command, or -1 if the shell could not be launched. Blocks until the command completes.
+
+### Low-Level Externs
+
+```
+fn getenv(name: str) -> str
+fn setenv(name: str, value: str, overwrite: i32) -> i32
+fn unsetenv(name: str) -> i32
+fn exit(code: i32)
+fn abort()
+fn getpid() -> i32
+fn getppid() -> i32
+fn system(cmd: str) -> i32
+```
+
+### Common Patterns
+
+```
+// Read config from environment
+let db_path: str = env_get("DB_PATH")
+if db_path == nil {
+    println("DB_PATH not set")
+    env_exit(1)
+}
+
+// Defensive abort on corrupted state
+if ptr == nil {
+    env_abort()
+}
+
+// Log the current PID (useful for daemon scripts)
+print("started pid=%d\n", env_pid())
+
+// Quick shell command
+env_run("mkdir -p /tmp/myapp/data")
+```

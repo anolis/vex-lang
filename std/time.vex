@@ -1,0 +1,59 @@
+/* std/time.vex — time, clocks, and sleep
+ *
+ * Monotonic wall-clock time via clock_gettime(CLOCK_MONOTONIC).
+ * CLOCK_REALTIME=0, CLOCK_MONOTONIC=1
+ *
+ * Usage:
+ *   let t0: i64 = time_mono_ns()
+ *   // ... work ...
+ *   let elapsed_ms: i64 = (time_mono_ns() - t0) / 1000000
+ */
+
+struct TimeSpec {
+    tv_sec:  i64,
+    tv_nsec: i64,
+}
+
+extern fn clock_gettime(clk: i32, ts: ptr<mut TimeSpec>) -> i32
+extern fn time(t: ptr<mut i64>) -> i64
+extern fn sleep(seconds: u32) -> u32
+extern fn usleep(usec: u32) -> i32
+
+// Return current time as Unix timestamp (seconds since epoch).
+fn time_now() -> i64 {
+    return time(nil)
+}
+
+// Return monotonic time in nanoseconds. Suitable for measuring elapsed time.
+fn time_mono_ns() -> i64 {
+    let ts: ptr<mut TimeSpec> = alloc<TimeSpec>()
+    clock_gettime(1, ts)   // CLOCK_MONOTONIC = 1
+    let ns: i64 = (*ts).tv_sec * 1000000000 + (*ts).tv_nsec
+    free(ts)
+    return ns
+}
+
+// Return monotonic time in microseconds.
+fn time_mono_us() -> i64 {
+    return time_mono_ns() / 1000
+}
+
+// Return monotonic time in milliseconds.
+fn time_mono_ms() -> i64 {
+    return time_mono_ns() / 1000000
+}
+
+// Sleep for ms milliseconds (uses usleep internally).
+fn time_sleep_ms(ms: u32) {
+    usleep(ms * 1000)
+}
+
+// Sleep for us microseconds.
+fn time_sleep_us(us: u32) {
+    usleep(us)
+}
+
+// Sleep for whole seconds.
+fn time_sleep_s(s: u32) {
+    sleep(s)
+}
