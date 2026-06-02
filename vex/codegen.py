@@ -86,6 +86,12 @@ class CodeGen:
         self.emit('#include <stdio.h>')
         self.emit('#include <math.h>')
         self.emit('#include <time.h>')
+        self.emit('#include <unistd.h>')
+        self.emit('#include <sys/socket.h>')
+        self.emit('#include <netinet/in.h>')
+        self.emit('#include <arpa/inet.h>')
+        self.emit('#include <sys/stat.h>')
+        self.emit('#include <fcntl.h>')
         self.emit()
 
     def _gen_struct(self, s: StructDecl):
