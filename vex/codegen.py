@@ -47,6 +47,8 @@ class CodeGen:
         self.tc = tc
         self.out: list[str] = []
         self.indent = 0
+        # extern fn names are C library symbols — never add the vex_ prefix
+        self.extern_fns: set[str] = {fn.name for fn in module.fns if fn.extern}
 
     def emit(self, line: str = ''):
         self.out.append('    ' * self.indent + line)
@@ -63,9 +65,10 @@ class CodeGen:
             self.emit()
         for s in self.module.structs:
             self._gen_struct(s)
-        # forward-declare all functions
+        # forward-declare Vex functions (not extern — those come from C headers)
         for fn in self.module.fns:
-            self.emit(self._fn_sig(fn) + ';')
+            if not fn.extern:
+                self.emit(self._fn_sig(fn) + ';')
         self.emit()
         for fn in self.module.fns:
             if fn.body is not None:
@@ -81,6 +84,8 @@ class CodeGen:
         self.emit('#include <stdlib.h>')
         self.emit('#include <string.h>')
         self.emit('#include <stdio.h>')
+        self.emit('#include <math.h>')
+        self.emit('#include <time.h>')
         self.emit()
 
     def _gen_struct(self, s: StructDecl):
@@ -109,7 +114,9 @@ class CodeGen:
             f"{type_to_c(p.typ, self.tc.structs)} {p.name}"
             for p in fn.params
         ) or 'void'
-        return f'{prefix}{ret} vex_{fn.name}({params})'
+        # extern fns use their bare C name; Vex fns get the vex_ prefix
+        name = fn.name if fn.extern else f'vex_{fn.name}'
+        return f'{prefix}{ret} {name}({params})'
 
     def _gen_fn(self, fn: FnDecl):
         self.emit(self._fn_sig(fn) + ' {')
@@ -125,11 +132,14 @@ class CodeGen:
 
     def _gen_stmt(self, stmt: Stmt):
         if isinstance(stmt, Let):
-            t = self.tc.types.get(id(stmt.value))
-            if t:
-                ct = rtype_to_c(t)
+            # Prefer the declared type annotation; fall back to the inferred
+            # type of the value expression. This matters when e.g. `let x: u64 = 0`
+            # — the literal 0 infers as i32, but the declared type is u64.
+            if stmt.typ is not None:
+                ct = type_to_c(stmt.typ, self.tc.structs)
             else:
-                ct = 'auto'  # fallback
+                t = self.tc.types.get(id(stmt.value))
+                ct = rtype_to_c(t) if t else 'auto'
             val = self._gen_expr(stmt.value)
             self.emit(f'{ct} {stmt.name} = {val};')
 
@@ -189,6 +199,12 @@ class CodeGen:
             self.indent -= 1
             self.emit('}')
 
+        elif isinstance(stmt, Break):
+            self.emit('break;')
+
+        elif isinstance(stmt, Continue):
+            self.emit('continue;')
+
         elif isinstance(stmt, FreeStmt):
             self.emit(f'free({self._gen_expr(stmt.expr)});')
 
@@ -203,7 +219,11 @@ class CodeGen:
             self.emit('}')
 
     def _gen_expr(self, expr: Expr) -> str:
-        if isinstance(expr, IntLit):   return str(expr.value)
+        if isinstance(expr, IntLit):
+            v = expr.value
+            if v > 2**63 - 1 or v < -(2**63):
+                return f'{v}ULL'
+            return str(v)
         if isinstance(expr, FloatLit): return repr(expr.value)
         if isinstance(expr, BoolLit):  return '1' if expr.value else '0'
         if isinstance(expr, NilLit):   return 'NULL'
@@ -215,7 +235,10 @@ class CodeGen:
             builtins = {'print': 'printf', 'println': 'printf'}
             if expr.name in builtins:
                 return builtins[expr.name]
-            # only global function names get the vex_ prefix
+            # extern fns are C library symbols — emit bare name
+            if expr.name in self.extern_fns:
+                return expr.name
+            # Vex-defined functions get the vex_ prefix
             if expr.name in self.tc.fns:
                 return f'vex_{expr.name}'
             return expr.name

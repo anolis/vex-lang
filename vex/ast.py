@@ -190,6 +190,14 @@ class FreeStmt:
     line: int = 0
 
 @dataclass
+class Break:
+    line: int = 0
+
+@dataclass
+class Continue:
+    line: int = 0
+
+@dataclass
 class ExprStmt:
     expr: object
     line: int = 0

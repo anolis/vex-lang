@@ -13,6 +13,7 @@ class TK(Enum):
     # keywords
     FN = auto(); LET = auto(); MUT = auto(); IF = auto(); ELSE = auto()
     WHILE = auto(); FOR = auto(); IN = auto(); RETURN = auto()
+    BREAK = auto(); CONTINUE = auto()
     STRUCT = auto(); ALLOC = auto(); FREE = auto(); AS = auto()
     IMPORT = auto(); EXTERN = auto(); INLINE = auto()
     # types
@@ -39,6 +40,7 @@ KEYWORDS: dict[str, TK] = {
     'fn': TK.FN, 'let': TK.LET, 'mut': TK.MUT,
     'if': TK.IF, 'else': TK.ELSE, 'while': TK.WHILE,
     'for': TK.FOR, 'in': TK.IN, 'return': TK.RETURN,
+    'break': TK.BREAK, 'continue': TK.CONTINUE,
     'struct': TK.STRUCT, 'alloc': TK.ALLOC, 'free': TK.FREE,
     'as': TK.AS, 'import': TK.IMPORT, 'extern': TK.EXTERN,
     'inline': TK.INLINE,

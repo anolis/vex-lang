@@ -1,0 +1,305 @@
+/* std/flux.vex — Flux binary format encoder/decoder in Vex
+ *
+ * Encodes into a caller-supplied ptr<mut u8> buffer.
+ * Decodes from a ptr<u8> buffer returning typed FluxVal unions.
+ *
+ * FluxVal.tag constants:
+ *   FLUX_NULL=0 FLUX_FALSE=1 FLUX_TRUE=2
+ *   FLUX_INT (signed, v.i64) FLUX_UINT (unsigned, v.u64)
+ *   FLUX_F32 FLUX_F64 (v.f64)
+ *   FLUX_BYTES FLUX_STR  (v.str_ptr + v.str_len)
+ *   FLUX_LIST FLUX_MAP   (v.count)
+ */
+
+import "mem.vex"
+import "str.vex"
+
+// ---- type tag constants ----
+fn flux_tag_null()  -> u8 { return 0 }
+fn flux_tag_false() -> u8 { return 1 }
+fn flux_tag_true()  -> u8 { return 2 }
+fn flux_tag_i8()    -> u8 { return 3 }
+fn flux_tag_i16()   -> u8 { return 4 }
+fn flux_tag_i32()   -> u8 { return 5 }
+fn flux_tag_i64()   -> u8 { return 6 }
+fn flux_tag_u8()    -> u8 { return 7 }
+fn flux_tag_u16()   -> u8 { return 8 }
+fn flux_tag_u32()   -> u8 { return 9 }
+fn flux_tag_u64()   -> u8 { return 10 }
+fn flux_tag_f32()   -> u8 { return 11 }
+fn flux_tag_f64()   -> u8 { return 12 }
+fn flux_tag_bytes() -> u8 { return 13 }
+fn flux_tag_str()   -> u8 { return 14 }
+fn flux_tag_list()  -> u8 { return 15 }
+fn flux_tag_map()   -> u8 { return 16 }
+fn flux_tag_schema()-> u8 { return 17 }
+
+// ---- error codes (returned where i32 is used) ----
+fn flux_ok()       -> i32 { return 0 }
+fn flux_overflow() -> i32 { return 1 }
+fn flux_trunc()    -> i32 { return 2 }
+fn flux_badtag()   -> i32 { return 3 }
+
+// ---- decoded value ----
+struct FluxVal {
+    tag:     u8,
+    // integer / bool
+    ival:    i64,
+    uval:    u64,
+    // float
+    fval:    f64,
+    // string / bytes (points into source buffer)
+    str_ptr: ptr<u8>,
+    str_len: u64,
+    // list / map element count
+    count:   u64,
+}
+
+// ---- varint (unsigned LEB128) ----
+
+fn flux_write_varint(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>, n: u64) -> i32 {
+    let mut v: u64 = n
+    while true {
+        if (*pos) >= cap { return flux_overflow() }
+        let b: u8 = (v & 127) as u8
+        v = v >> 7
+        if v != 0 {
+            buf[(*pos)] = (b | 128) as u8
+        } else {
+            buf[(*pos)] = b
+        }
+        (*pos) += 1
+        if v == 0 { return flux_ok() }
+    }
+    return flux_ok()
+}
+
+fn flux_read_varint(buf: ptr<u8>, len: u64, pos: ptr<mut u64>, out: ptr<mut u64>) -> i32 {
+    let mut result: u64 = 0
+    let mut shift: u64 = 0
+    while (*pos) < len {
+        let b: u64 = buf[(*pos)] as u64
+        (*pos) += 1
+        result = result | ((b & 127) << shift)
+        if (b & 128) == 0 {
+            (*out) = result
+            return flux_ok()
+        }
+        shift += 7
+        if shift >= 64 { return flux_overflow() }
+    }
+    return flux_trunc()
+}
+
+// ---- encoders ----
+
+fn flux_enc_null(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>) -> i32 {
+    if (*pos) >= cap { return flux_overflow() }
+    buf[(*pos)] = flux_tag_null()
+    (*pos) += 1
+    return flux_ok()
+}
+
+fn flux_enc_bool(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>, v: bool) -> i32 {
+    if (*pos) >= cap { return flux_overflow() }
+    if v { buf[(*pos)] = flux_tag_true() }
+    else { buf[(*pos)] = flux_tag_false() }
+    (*pos) += 1
+    return flux_ok()
+}
+
+fn flux_enc_i64(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>, v: i64) -> i32 {
+    if (*pos) + 9 > cap { return flux_overflow() }
+    if v >= 0 {
+        if v <= 255 {
+            buf[(*pos)] = flux_tag_u8(); (*pos) += 1
+            buf[(*pos)] = v as u8;       (*pos) += 1
+            return flux_ok()
+        }
+        if v <= 65535 {
+            buf[(*pos)] = flux_tag_u16(); (*pos) += 1
+            let u: u16 = v as u16
+            memcpy(buf + (*pos), (&u) as ptr<u8>, 2)
+            (*pos) += 2; return flux_ok()
+        }
+        if v <= 2147483647 {
+            buf[(*pos)] = flux_tag_u32(); (*pos) += 1
+            let u: u32 = v as u32
+            memcpy(buf + (*pos), (&u) as ptr<u8>, 4)
+            (*pos) += 4; return flux_ok()
+        }
+        buf[(*pos)] = flux_tag_u64(); (*pos) += 1
+        memcpy(buf + (*pos), (&v) as ptr<u8>, 8)
+        (*pos) += 8; return flux_ok()
+    }
+    if v >= -128 {
+        buf[(*pos)] = flux_tag_i8(); (*pos) += 1
+        buf[(*pos)] = v as u8;       (*pos) += 1
+        return flux_ok()
+    }
+    if v >= -32768 {
+        buf[(*pos)] = flux_tag_i16(); (*pos) += 1
+        let s: i16 = v as i16
+        memcpy(buf + (*pos), (&s) as ptr<u8>, 2)
+        (*pos) += 2; return flux_ok()
+    }
+    if v >= -2147483648 {
+        buf[(*pos)] = flux_tag_i32(); (*pos) += 1
+        let s: i32 = v as i32
+        memcpy(buf + (*pos), (&s) as ptr<u8>, 4)
+        (*pos) += 4; return flux_ok()
+    }
+    buf[(*pos)] = flux_tag_i64(); (*pos) += 1
+    memcpy(buf + (*pos), (&v) as ptr<u8>, 8)
+    (*pos) += 8
+    return flux_ok()
+}
+
+fn flux_enc_f64(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>, v: f64) -> i32 {
+    if (*pos) + 9 > cap { return flux_overflow() }
+    buf[(*pos)] = flux_tag_f64(); (*pos) += 1
+    memcpy(buf + (*pos), (&v) as ptr<u8>, 8)
+    (*pos) += 8
+    return flux_ok()
+}
+
+fn flux_enc_bytes(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>,
+                  data: ptr<u8>, len: u64) -> i32 {
+    if (*pos) >= cap { return flux_overflow() }
+    buf[(*pos)] = flux_tag_bytes(); (*pos) += 1
+    let r: i32 = flux_write_varint(buf, cap, pos, len)
+    if r != flux_ok() { return r }
+    if (*pos) + len > cap { return flux_overflow() }
+    memcpy(buf + (*pos), data, len)
+    (*pos) += len
+    return flux_ok()
+}
+
+fn flux_enc_str(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>, s: str) -> i32 {
+    if (*pos) >= cap { return flux_overflow() }
+    buf[(*pos)] = flux_tag_str(); (*pos) += 1
+    let n: u64 = strlen(s)
+    let r: i32 = flux_write_varint(buf, cap, pos, n)
+    if r != flux_ok() { return r }
+    if (*pos) + n > cap { return flux_overflow() }
+    memcpy(buf + (*pos), s as ptr<u8>, n)
+    (*pos) += n
+    return flux_ok()
+}
+
+fn flux_enc_list_hdr(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>, count: u64) -> i32 {
+    if (*pos) >= cap { return flux_overflow() }
+    buf[(*pos)] = flux_tag_list(); (*pos) += 1
+    return flux_write_varint(buf, cap, pos, count)
+}
+
+fn flux_enc_map_hdr(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>, count: u64) -> i32 {
+    if (*pos) >= cap { return flux_overflow() }
+    buf[(*pos)] = flux_tag_map(); (*pos) += 1
+    return flux_write_varint(buf, cap, pos, count)
+}
+
+fn flux_enc_schema_hdr(buf: ptr<mut u8>, cap: u64, pos: ptr<mut u64>, schema_id: u64) -> i32 {
+    if (*pos) >= cap { return flux_overflow() }
+    buf[(*pos)] = flux_tag_schema(); (*pos) += 1
+    return flux_write_varint(buf, cap, pos, schema_id)
+}
+
+// ---- decoder ----
+
+fn flux_dec(buf: ptr<u8>, len: u64, pos: ptr<mut u64>, out: ptr<mut FluxVal>) -> i32 {
+    if (*pos) >= len { return flux_trunc() }
+    let tag: u8 = buf[(*pos)]
+    (*pos) += 1
+    (*out).tag = tag
+
+    if tag == flux_tag_null()  { return flux_ok() }
+    if tag == flux_tag_false() { (*out).uval = 0; return flux_ok() }
+    if tag == flux_tag_true()  { (*out).uval = 1; return flux_ok() }
+
+    if tag == flux_tag_u8() {
+        if (*pos) + 1 > len { return flux_trunc() }
+        (*out).uval = buf[(*pos)] as u64
+        (*out).ival = (*out).uval as i64
+        (*pos) += 1; return flux_ok()
+    }
+    if tag == flux_tag_u16() {
+        if (*pos) + 2 > len { return flux_trunc() }
+        let mut v: u16 = 0
+        memcpy((&v) as ptr<mut u8>, buf + (*pos), 2)
+        (*out).uval = v as u64
+        (*out).ival = (*out).uval as i64
+        (*pos) += 2; return flux_ok()
+    }
+    if tag == flux_tag_u32() {
+        if (*pos) + 4 > len { return flux_trunc() }
+        let mut v: u32 = 0
+        memcpy((&v) as ptr<mut u8>, buf + (*pos), 4)
+        (*out).uval = v as u64
+        (*out).ival = (*out).uval as i64
+        (*pos) += 4; return flux_ok()
+    }
+    if tag == flux_tag_u64() {
+        if (*pos) + 8 > len { return flux_trunc() }
+        memcpy((&(*out).uval) as ptr<mut u8>, buf + (*pos), 8)
+        (*out).ival = (*out).uval as i64
+        (*pos) += 8; return flux_ok()
+    }
+    if tag == flux_tag_i8() {
+        if (*pos) + 1 > len { return flux_trunc() }
+        (*out).ival = (buf[(*pos)] as i8) as i64
+        (*out).uval = (*out).ival as u64
+        (*pos) += 1; return flux_ok()
+    }
+    if tag == flux_tag_i16() {
+        if (*pos) + 2 > len { return flux_trunc() }
+        let mut v: i16 = 0
+        memcpy((&v) as ptr<mut u8>, buf + (*pos), 2)
+        (*out).ival = v as i64
+        (*out).uval = (*out).ival as u64
+        (*pos) += 2; return flux_ok()
+    }
+    if tag == flux_tag_i32() {
+        if (*pos) + 4 > len { return flux_trunc() }
+        let mut v: i32 = 0
+        memcpy((&v) as ptr<mut u8>, buf + (*pos), 4)
+        (*out).ival = v as i64
+        (*out).uval = (*out).ival as u64
+        (*pos) += 4; return flux_ok()
+    }
+    if tag == flux_tag_i64() {
+        if (*pos) + 8 > len { return flux_trunc() }
+        memcpy((&(*out).ival) as ptr<mut u8>, buf + (*pos), 8)
+        (*out).uval = (*out).ival as u64
+        (*pos) += 8; return flux_ok()
+    }
+    if tag == flux_tag_f32() {
+        if (*pos) + 4 > len { return flux_trunc() }
+        let mut v: f32 = 0.0
+        memcpy((&v) as ptr<mut u8>, buf + (*pos), 4)
+        (*out).fval = v as f64; (*pos) += 4; return flux_ok()
+    }
+    if tag == flux_tag_f64() {
+        if (*pos) + 8 > len { return flux_trunc() }
+        memcpy((&(*out).fval) as ptr<mut u8>, buf + (*pos), 8)
+        (*pos) += 8; return flux_ok()
+    }
+    if tag == flux_tag_str() || tag == flux_tag_bytes() {
+        let mut slen: u64 = 0
+        let r: i32 = flux_read_varint(buf, len, pos, &slen)
+        if r != flux_ok() { return r }
+        if (*pos) + slen > len { return flux_trunc() }
+        (*out).str_ptr = buf + (*pos)
+        (*out).str_len = slen
+        (*pos) += slen
+        return flux_ok()
+    }
+    if tag == flux_tag_list() || tag == flux_tag_map() || tag == flux_tag_schema() {
+        let mut count: u64 = 0
+        let r: i32 = flux_read_varint(buf, len, pos, &count)
+        if r != flux_ok() { return r }
+        (*out).count = count
+        return flux_ok()
+    }
+    return flux_badtag()
+}

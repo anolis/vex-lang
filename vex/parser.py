@@ -1,5 +1,6 @@
 """Vex parser: tokens -> AST."""
 from __future__ import annotations
+import os
 from .lexer import Token, TK, tokenize
 from .ast import *
 
@@ -43,6 +44,23 @@ class Parser:
     def error(self, msg: str) -> ParseError:
         t = self.peek()
         return ParseError(f"{self.filename}:{t.line}:{t.col}: {msg}")
+
+    def _looks_like_struct_lit(self) -> bool:
+        """Peek past the { to see if this is Name{field: val} or just a block."""
+        # pos currently points at { — look at the token after it
+        ahead = self.pos + 1
+        if ahead >= len(self.tokens):
+            return False
+        t = self.tokens[ahead]
+        # Empty struct: Name {}
+        if t.kind == TK.RBRACE:
+            return True
+        # Field assignment: Name { ident : ...
+        if t.kind != TK.IDENT:
+            return False
+        if ahead + 1 >= len(self.tokens):
+            return False
+        return self.tokens[ahead + 1].kind == TK.COLON
 
     # ---- Type parsing ----
 
@@ -210,9 +228,13 @@ class Parser:
         if t.kind == TK.NIL:   return NilLit(line=t.line)
 
         if t.kind == TK.IDENT:
-            # struct literal: Name { field: expr, ... }
-            if self.check(TK.LBRACE):
-                self.advance()
+            # Struct literal: Name { field: expr, ... }
+            # Disambiguate from a block: only treat { as struct-literal if the
+            # very next two tokens are IDENT COLON (a field assignment) or RBRACE
+            # (empty struct). This prevents `if cond { stmt }` from being parsed
+            # as a struct literal where `cond` is the struct name.
+            if self.check(TK.LBRACE) and self._looks_like_struct_lit():
+                self.advance()  # consume {
                 fields = []
                 while not self.check(TK.RBRACE, TK.EOF):
                     fname = self.expect(TK.IDENT).value
@@ -283,6 +305,16 @@ class Parser:
             body = self.parse_block()
             return For(var, iter_expr, body, line=t.line)
 
+        if t.kind == TK.BREAK:
+            self.advance()
+            self.match(TK.SEMICOLON)
+            return Break(line=t.line)
+
+        if t.kind == TK.CONTINUE:
+            self.advance()
+            self.match(TK.SEMICOLON)
+            return Continue(line=t.line)
+
         if t.kind == TK.FREE:
             self.advance()
             expr = self.parse_expr()
@@ -331,7 +363,9 @@ class Parser:
 
     # ---- Top-level ----
 
-    def parse_module(self) -> Module:
+    def parse_module(self, already_parsed: set | None = None) -> Module:
+        if already_parsed is None:
+            already_parsed = set()
         imports, structs, fns = [], [], []
         while not self.check(TK.EOF):
             t = self.peek()
@@ -339,7 +373,18 @@ class Parser:
                 self.advance()
                 path = self.expect(TK.STR).value
                 self.match(TK.SEMICOLON)
-                imports.append(ImportDecl(path, line=t.line))
+                if path.endswith('.vex'):
+                    # Vex-to-Vex import: resolve relative to current file and merge
+                    base = os.path.dirname(os.path.abspath(self.filename))
+                    vex_path = os.path.normpath(os.path.join(base, path))
+                    if vex_path not in already_parsed:
+                        already_parsed.add(vex_path)
+                        sub = parse_file(vex_path, already_parsed)
+                        imports.extend(sub.imports)
+                        structs.extend(sub.structs)
+                        fns.extend(sub.fns)
+                else:
+                    imports.append(ImportDecl(path, line=t.line))
             elif t.kind == TK.STRUCT:
                 structs.append(self.parse_struct())
             elif t.kind in (TK.FN, TK.EXTERN, TK.INLINE):
@@ -391,3 +436,39 @@ class Parser:
 def parse(src: str, filename: str = '<input>') -> Module:
     tokens = tokenize(src, filename)
     return Parser(tokens, filename).parse_module()
+
+
+def parse_file(path: str, already_parsed: set | None = None) -> Module:
+    with open(path) as f:
+        src = f.read()
+    tokens = tokenize(src, path)
+    ap = already_parsed if already_parsed is not None else {os.path.abspath(path)}
+    return Parser(tokens, path).parse_module(ap)
+
+
+def parse_files(paths: list[str]) -> Module:
+    """Parse multiple .vex files and merge them into one Module."""
+    already_parsed: set[str] = set()
+    merged = Module([], [], [], filename=paths[0] if paths else '<input>')
+    seen_fns: set[str] = set()
+    seen_structs: set[str] = set()
+    seen_imports: set[str] = set()
+    for path in paths:
+        ap = os.path.abspath(path)
+        if ap in already_parsed:
+            continue
+        already_parsed.add(ap)
+        mod = parse_file(path, already_parsed)
+        for imp in mod.imports:
+            if imp.path not in seen_imports:
+                seen_imports.add(imp.path)
+                merged.imports.append(imp)
+        for s in mod.structs:
+            if s.name not in seen_structs:
+                seen_structs.add(s.name)
+                merged.structs.append(s)
+        for fn in mod.fns:
+            if fn.name not in seen_fns:
+                seen_fns.add(fn.name)
+                merged.fns.append(fn)
+    return merged

@@ -237,7 +237,9 @@ class TypeChecker:
     def _infer(self, expr: Expr, scope: Scope) -> RType:
         if isinstance(expr, IntLit):
             v = expr.value
-            if 0 <= v < 2**8:  return I32  # default int is i32
+            if 0 <= v < 2**31:  return I32   # default small int is i32
+            if -(2**63) <= v < 2**63: return I64
+            if 0 <= v < 2**64:  return U64   # large positive → u64
             return I64
         if isinstance(expr, FloatLit): return F64
         if isinstance(expr, StrLit):   return STR
@@ -285,6 +287,7 @@ class TypeChecker:
             ot = self.check_expr(expr.obj, scope)
             self.check_expr(expr.idx, scope)
             if isinstance(ot, (TSlice, TArray)): return ot.inner
+            if isinstance(ot, TPtr): return ot.inner  # pointer indexing
             raise TypeError(f"line {expr.line}: index on non-indexable {ot}")
 
         if isinstance(expr, Call):
@@ -313,6 +316,9 @@ class TypeChecker:
             lt = self.check_expr(expr.left, scope)
             rt = self.check_expr(expr.right, scope)
             if expr.op in ('==','!=','<','>','<=','>=','&&','||'): return BOOL
+            # pointer arithmetic: ptr + int or ptr - int → ptr
+            if expr.op in ('+', '-') and isinstance(lt, (TPtr, TSlice)) and isinstance(rt, TInt):
+                return lt
             if not self._compat(lt, rt):
                 raise TypeError(f"line {expr.line}: binop {expr.op} {lt} {rt}")
             return lt
@@ -344,10 +350,15 @@ class TypeChecker:
 
     def _compat(self, got: RType, expected: RType) -> bool:
         if got == expected: return True
-        if isinstance(got, TNil) and isinstance(expected, TPtr): return True
+        if isinstance(got, TNil) and isinstance(expected, (TPtr, TSlice)): return True
         if isinstance(got, TInt) and isinstance(expected, TInt): return True
         if isinstance(got, TFloat) and isinstance(expected, TFloat): return True
         if isinstance(got, TInt) and isinstance(expected, TFloat): return True
+        # slice<T> and ptr<T> are both T* in C — interchangeable
+        if isinstance(got, TSlice) and isinstance(expected, TPtr): return True
+        if isinstance(got, TPtr)   and isinstance(expected, TSlice): return True
+        # any pointer/slice is compat with void* (ptr<u8> used as generic buffer)
+        if isinstance(got, (TPtr, TSlice)) and isinstance(expected, (TPtr, TSlice)): return True
         return False
 
 

@@ -1,0 +1,27 @@
+/* std/str.vex — string operations (null-terminated C strings) */
+
+extern fn strlen(s: str) -> u64
+extern fn strcmp(a: str, b: str) -> i32
+extern fn strncmp(a: str, b: str, n: u64) -> i32
+extern fn strcpy(dst: ptr<mut u8>, src: str) -> ptr<mut u8>
+extern fn strncpy(dst: ptr<mut u8>, src: str, n: u64) -> ptr<mut u8>
+extern fn strcat(dst: ptr<mut u8>, src: str) -> ptr<mut u8>
+extern fn strchr(s: str, c: i32) -> ptr<mut u8>
+extern fn strstr(haystack: str, needle: str) -> ptr<mut u8>
+extern fn strtol(s: str, end: ptr<mut u8>, base: i32) -> i64
+extern fn strtod(s: str, end: ptr<mut u8>) -> f64
+extern fn atoi(s: str) -> i32
+extern fn atol(s: str) -> i64
+
+fn str_eq(a: str, b: str) -> bool {
+    return strcmp(a, b) == 0
+}
+
+fn str_starts_with(s: str, prefix: str) -> bool {
+    let plen: u64 = strlen(prefix)
+    return strncmp(s, prefix, plen) == 0
+}
+
+fn str_len(s: str) -> u64 {
+    return strlen(s)
+}

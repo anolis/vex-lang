@@ -1,0 +1,32 @@
+/* Test: multi-file compilation + stdlib imports */
+import "../std/str.vex"
+import "../std/math.vex"
+import "../std/hash.vex"
+
+fn main() -> i32 {
+    // str tests
+    print("strlen(hello) = %llu\n", strlen("hello"))
+    print("str_eq = %d\n", str_eq("abc", "abc") as i32)
+    print("starts_with = %d\n", str_starts_with("foobar", "foo") as i32)
+
+    // math tests
+    print("sqrt(144) = %f\n", sqrt(144.0))
+    print("max(3,7) = %lld\n", max_i64(3, 7))
+    print("abs(-99) = %lld\n", abs_i64(-99))
+
+    // hash table test
+    let ht: ptr<mut HTable> = ht_new(64)
+    ht_set(ht, "alpha", 100)
+    ht_set(ht, "beta",  200)
+    ht_set(ht, "gamma", 300)
+    print("alpha = %llu\n", ht_get(ht, "alpha"))
+    print("beta  = %llu\n", ht_get(ht, "beta"))
+    print("gamma = %llu\n", ht_get(ht, "gamma"))
+    print("missing = %llu\n", ht_get(ht, "delta"))
+    ht_del(ht, "beta")
+    print("beta after del = %llu\n", ht_get(ht, "beta"))
+    print("ht.len = %llu\n", (*ht).len)
+    ht_free(ht)
+
+    return 0
+}

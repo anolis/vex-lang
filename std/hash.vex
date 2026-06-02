@@ -1,0 +1,151 @@
+/* std/hash.vex — open-addressing hash map (string key → u64 value)
+ *
+ * Keys are heap-copied null-terminated strings.
+ * Values are u64 — store integers, byte offsets, or pointers cast to u64.
+ * HT_MISSING (0xFFFFFFFFFFFFFFFF) signals key not found.
+ *
+ * Usage:
+ *   let ht: ptr<mut HTable> = ht_new(1024)
+ *   ht_set(ht, "hello", 42)
+ *   let v: u64 = ht_get(ht, "hello")
+ *   ht_del(ht, "hello")
+ *   ht_free(ht)
+ */
+
+import "str.vex"
+import "mem.vex"
+
+struct HSlot {
+    key:  ptr<mut u8>,   // nil = empty slot
+    val:  u64,
+    hash: u64,
+}
+
+struct HTable {
+    slots: ptr<mut u8>,  // HSlot array (stored as raw bytes, indexed manually)
+    cap:   u64,
+    len:   u64,
+}
+
+fn _ht_slot_size() -> u64 { return 24 }   // sizeof(HSlot): 8+8+8
+
+fn _ht_slot(ht: ptr<mut HTable>, idx: u64) -> ptr<mut HSlot> {
+    let base: ptr<mut u8> = (*ht).slots
+    let off: u64 = idx * _ht_slot_size()
+    return (base[off] as u64) as ptr<mut HSlot>
+}
+
+fn _ht_fnv1a(s: str) -> u64 {
+    let mut h: u64 = 14695981039346656037
+    let len: u64 = strlen(s)
+    let mut i: u64 = 0
+    while i < len {
+        let b: u64 = (s as ptr<u8>)[i] as u64
+        h = (h ^ b) * 1099511628211
+        i += 1
+    }
+    return h
+}
+
+fn ht_new(cap: u64) -> ptr<mut HTable> {
+    let ht: ptr<mut HTable> = alloc<HTable>()
+    let sz: u64 = cap * _ht_slot_size()
+    let slots: ptr<mut u8> = malloc(sz)
+    memset(slots, 0, sz)
+    (*ht).slots = slots
+    (*ht).cap   = cap
+    (*ht).len   = 0
+    return ht
+}
+
+fn ht_set(ht: ptr<mut HTable>, key: str, val: u64) {
+    let h: u64    = _ht_fnv1a(key)
+    let cap: u64  = (*ht).cap
+    let mut idx: u64 = h % cap
+    let base: ptr<mut u8> = (*ht).slots
+    let sz: u64   = _ht_slot_size()
+    let mut i: u64 = 0
+    while i < cap {
+        let sp: ptr<mut HSlot> = (base + idx * sz) as ptr<mut HSlot>
+        if (*sp).key == nil {
+            let klen: u64 = strlen(key) + 1
+            let kbuf: ptr<mut u8> = malloc(klen)
+            memcpy(kbuf, key as ptr<u8>, klen)
+            (*sp).key  = kbuf
+            (*sp).val  = val
+            (*sp).hash = h
+            (*ht).len += 1
+            return
+        }
+        if (*sp).hash == h {
+            if str_eq((*sp).key as str, key) {
+                (*sp).val = val
+                return
+            }
+        }
+        idx = (idx + 1) % cap
+        i += 1
+    }
+}
+
+fn ht_get(ht: ptr<mut HTable>, key: str) -> u64 {
+    let h: u64   = _ht_fnv1a(key)
+    let cap: u64 = (*ht).cap
+    let mut idx: u64 = h % cap
+    let base: ptr<mut u8> = (*ht).slots
+    let sz: u64  = _ht_slot_size()
+    let mut i: u64 = 0
+    while i < cap {
+        let sp: ptr<mut HSlot> = (base + idx * sz) as ptr<mut HSlot>
+        if (*sp).key == nil { return 0xffffffffffffffff }
+        if (*sp).hash == h {
+            if str_eq((*sp).key as str, key) { return (*sp).val }
+        }
+        idx = (idx + 1) % cap
+        i += 1
+    }
+    return 0xffffffffffffffff
+}
+
+fn ht_has(ht: ptr<mut HTable>, key: str) -> bool {
+    return ht_get(ht, key) != 0xffffffffffffffff
+}
+
+fn ht_del(ht: ptr<mut HTable>, key: str) {
+    let h: u64   = _ht_fnv1a(key)
+    let cap: u64 = (*ht).cap
+    let mut idx: u64 = h % cap
+    let base: ptr<mut u8> = (*ht).slots
+    let sz: u64  = _ht_slot_size()
+    let mut i: u64 = 0
+    while i < cap {
+        let sp: ptr<mut HSlot> = (base + idx * sz) as ptr<mut HSlot>
+        if (*sp).key == nil { return }
+        if (*sp).hash == h {
+            if str_eq((*sp).key as str, key) {
+                free((*sp).key)
+                (*sp).key  = nil
+                (*sp).val  = 0
+                (*sp).hash = 0
+                (*ht).len -= 1
+                return
+            }
+        }
+        idx = (idx + 1) % cap
+        i += 1
+    }
+}
+
+fn ht_free(ht: ptr<mut HTable>) {
+    let cap: u64 = (*ht).cap
+    let base: ptr<mut u8> = (*ht).slots
+    let sz: u64  = _ht_slot_size()
+    let mut i: u64 = 0
+    while i < cap {
+        let sp: ptr<mut HSlot> = (base + i * sz) as ptr<mut HSlot>
+        if (*sp).key != nil { free((*sp).key) }
+        i += 1
+    }
+    free((*ht).slots)
+    free(ht)
+}

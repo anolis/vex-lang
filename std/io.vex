@@ -1,0 +1,76 @@
+/* std/io.vex — file and stdio I/O
+ *
+ * FILE* is represented as ptr<mut u8> (opaque handle).
+ * SEEK constants: SEEK_SET=0, SEEK_CUR=1, SEEK_END=2
+ */
+
+// ---- stdio streams ----
+extern fn fopen(path: str, mode: str) -> ptr<mut u8>
+extern fn fclose(fp: ptr<mut u8>) -> i32
+extern fn fflush(fp: ptr<mut u8>) -> i32
+extern fn feof(fp: ptr<mut u8>) -> i32
+extern fn ferror(fp: ptr<mut u8>) -> i32
+extern fn clearerr(fp: ptr<mut u8>)
+extern fn rewind(fp: ptr<mut u8>)
+
+// ---- read / write ----
+extern fn fread(buf: ptr<mut u8>, size: u64, count: u64, fp: ptr<mut u8>) -> u64
+extern fn fwrite(buf: ptr<u8>, size: u64, count: u64, fp: ptr<mut u8>) -> u64
+extern fn fgetc(fp: ptr<mut u8>) -> i32
+extern fn fputc(c: i32, fp: ptr<mut u8>) -> i32
+extern fn fputs(s: str, fp: ptr<mut u8>) -> i32
+
+// ---- seek / tell ----
+extern fn fseek(fp: ptr<mut u8>, offset: i64, whence: i32) -> i32
+extern fn ftell(fp: ptr<mut u8>) -> i64
+
+// ---- formatted output ----
+extern fn fprintf(fp: ptr<mut u8>, fmt: str) -> i32
+extern fn snprintf(buf: ptr<mut u8>, size: u64, fmt: str) -> i32
+
+// ---- file system ----
+extern fn remove(path: str) -> i32
+extern fn rename(old: str, new: str) -> i32
+
+// ---- convenience wrappers ----
+
+fn io_read_all(path: str, out_len: ptr<mut u64>) -> ptr<mut u8> {
+    let fp: ptr<mut u8> = fopen(path, "rb")
+    if fp == nil { return nil }
+    fseek(fp, 0, 2)
+    let size: i64 = ftell(fp)
+    fseek(fp, 0, 0)
+    let buf: ptr<mut u8> = alloc<u8>(size as u64 + 1)
+    if buf == nil { fclose(fp); return nil }
+    fread(buf, 1, size as u64, fp)
+    fclose(fp)
+    (*out_len) = size as u64
+    return buf
+}
+
+fn io_write_all(path: str, buf: ptr<u8>, len: u64) -> i32 {
+    let fp: ptr<mut u8> = fopen(path, "wb")
+    if fp == nil { return -1 }
+    let written: u64 = fwrite(buf, 1, len, fp)
+    fclose(fp)
+    if written != len { return -1 }
+    return 0
+}
+
+fn io_append(path: str, buf: ptr<u8>, len: u64) -> i32 {
+    let fp: ptr<mut u8> = fopen(path, "ab")
+    if fp == nil { return -1 }
+    let written: u64 = fwrite(buf, 1, len, fp)
+    fclose(fp)
+    if written != len { return -1 }
+    return 0
+}
+
+fn io_file_size(path: str) -> i64 {
+    let fp: ptr<mut u8> = fopen(path, "rb")
+    if fp == nil { return -1 }
+    fseek(fp, 0, 2)
+    let size: i64 = ftell(fp)
+    fclose(fp)
+    return size
+}
